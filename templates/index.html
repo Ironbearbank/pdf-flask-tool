@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>JPG + PDF 結合ツール</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 40px;
+        }
+        h1 {
+            color: #333;
+        }
+        form {
+            background: #f9f9f9;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 8px rgba(0,0,0,0.1);
+            max-width: 500px;
+        }
+        p {
+            margin-bottom: 15px;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            background-color: #4285f4;
+            color: white;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #3367d6;
+        }
+    </style>
+</head>
+<body>
+    <h1>JPG + PDF を結合する</h1>
+    <form action="/merge" method="post" enctype="multipart/form-data">
+        <p>
+            PDFファイルを選択：<br>
+            <input type="file" name="pdf" accept=".pdf" required>
+        </p>
+        <p>
+            JPGファイルを選択（複数可）：<br>
+            <input type="file" name="jpgs" accept=".jpg,.jpeg" multiple required>
+        </p>
+
+        <p>
+            モード選択：<br>
+            <label><input type="radio" name="mode" value="add_to_start" checked> 最初に追加</label><br>
+            <label><input type="radio" name="mode" value="add_to_end"> 最後に追加</label><br>
+            <label><input type="radio" name="mode" value="replace"> 指定ページに差し替え</label>
+        </p>
+        
+        <p id="pageNumberField" style="display: none;">
+            差し替えるページ番号（1ページ目 = 1）：<br>
+            <input type="number" name="replace_page" min="1">
+        </p>
+
+        <button type="submit">結合してダウンロード</button>
+    </form>
+
+    <script>
+        const radios = document.querySelectorAll('input[name="mode"]');      
+        const pageField = document.getElementById('pageNumberField');
+
+        radios.forEach(radio => {
+            radio.addEventListener('change', () => {
+                if (document.querySelector('input[name="mode"]:checked').value === 'replace') {
+                    pageField.style.display = 'block';
+                } else {
+                    pageField.style.display = 'none';
+                }
+            });
+        });
+    </script>
+</body>
+</html>
