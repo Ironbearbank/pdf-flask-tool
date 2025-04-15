@@ -1,79 +1,136 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <title>JPG + PDF 結合ツール</title>
-    <style>
-        body {
-            font-family: sans-serif;
-            margin: 40px;
-        }
-        h1 {
-            color: #333;
-        }
-        form {
-            background: #f9f9f9;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 0 8px rgba(0,0,0,0.1);
-            max-width: 500px;
-        }
-        p {
-            margin-bottom: 15px;
-        }
-        button {
-            padding: 10px 20px;
-            border: none;
-            background-color: #4285f4;
-            color: white;
-            border-radius: 5px;
-            cursor: pointer;
-        }
-        button:hover {
-            background-color: #3367d6;
-        }
-    </style>
-</head>
-<body>
-    <h1>JPG + PDF を結合する</h1>
-    <form action="/merge" method="post" enctype="multipart/form-data">
-        <p>
-            PDFファイルを選択：<br>
-            <input type="file" name="pdf" accept=".pdf" required>
-        </p>
-        <p>
-            JPGファイルを選択（複数可）：<br>
-            <input type="file" name="jpgs" accept=".jpg,.jpeg" multiple required>
-        </p>
+from flask import Flask, render_template, request, send_file
+from PyPDF2 import PdfReader, PdfWriter
+from PIL import Image
+import threading
+import webbrowser
+import tempfile
+import os
+import sys
+import io
+import time
+import logging
 
-        <p>
-            モード選択：<br>
-            <label><input type="radio" name="mode" value="add_to_start" checked> 最初に追加</label><br>
-            <label><input type="radio" name="mode" value="add_to_end"> 最後に追加</label><br>
-            <label><input type="radio" name="mode" value="replace"> 指定ページに差し替え</label>
-        </p>
-        
-        <p id="pageNumberField" style="display: none;">
-            差し替えるページ番号（1ページ目 = 1）：<br>
-            <input type="number" name="replace_page" min="1">
-        </p>
+# ✅ PyInstaller環境かどうかの判定とテンプレートフォルダのパス設定
+if getattr(sys, 'frozen', False):
+    base_path = sys._MEIPASS
+else:
+    base_path = os.path.dirname(os.path.abspath(__file__))
 
-        <button type="submit">結合してダウンロード</button>
-    </form>
+template_path = os.path.join(base_path, 'templates')
 
-    <script>
-        const radios = document.querySelectorAll('input[name="mode"]');      
-        const pageField = document.getElementById('pageNumberField');
+# ✅ Flaskアプリ作成
+app = Flask(__name__, template_folder=template_path)
 
-        radios.forEach(radio => {
-            radio.addEventListener('change', () => {
-                if (document.querySelector('input[name="mode"]:checked').value === 'replace') {
-                    pageField.style.display = 'block';
-                } else {
-                    pageField.style.display = 'none';
-                }
-            });
-        });
-    </script>
-</body>
-</html>
+# ✅ ログ出力設定（PyInstaller環境でも保存可能な一時フォルダに）
+log_file_path = os.path.join(tempfile.gettempdir(), "flask_app_log.txt")
+file_handler = logging.FileHandler(log_file_path, mode='w', encoding='utf-8')
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s in %(module)s: %(message)s"))
+app.logger.addHandler(file_handler)
+app.logger.setLevel(logging.INFO)
+
+app.logger.info("🚀 app.py started")
+
+@app.route('/')
+def index():
+    try:
+        app.logger.info(f"📂 template_folder = {app.template_folder}")
+        app.logger.info(f"📄 template files = {os.listdir(app.template_folder)}")
+        return render_template('index.html')
+    except Exception as e:
+        app.logger.error(f"❌ テンプレートエラー: {e}")
+        return f"テンプレート読み込みエラー: {str(e)}", 500
+
+@app.route('/merge', methods=['POST'])
+def merge():
+    pdf_file = request.files.get('pdf')
+    jpg_files = request.files.getlist('jpgs')
+    mode = request.form.get('mode')
+
+    replace_page = None
+    if mode == "replace":
+        try:
+            replace_page_input = request.form.get('replace_page', '').strip()
+            if replace_page_input == '':
+                return "ページ番号を入力してください", 400
+            replace_page = int(replace_page_input) - 1
+        except ValueError:
+            return "ページ番号は数値で指定してください", 400
+
+    if not pdf_file or not jpg_files:
+        return "PDFとJPGの両方を選択してください", 400
+
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = os.path.join(temp_dir, 'original.pdf')
+            pdf_file.save(pdf_path)
+            pdf_reader = PdfReader(pdf_path)
+            writer = PdfWriter()
+
+            def convert_jpg_to_pdf_page(jpg_file):
+                img = Image.open(jpg_file).convert("RGB")
+                # 横幅をA4（210mm）にフィットさせる（アスペクト比維持）
+                target_width_px = int(210 / 0.264583)
+                aspect_ratio = img.height / img.width
+                new_height = int(target_width_px * aspect_ratio)
+                img = img.resize((target_width_px, new_height), Image.LANCZOS)
+                temp_pdf = os.path.join(temp_dir, f"{jpg_file.filename}_temp.pdf")
+                img.save(temp_pdf, "PDF", quality=100)
+                return PdfReader(temp_pdf).pages[0]
+
+            if mode == "add_to_start":
+                for jpg in jpg_files:
+                    writer.add_page(convert_jpg_to_pdf_page(jpg))
+                for page in pdf_reader.pages:
+                    writer.add_page(page)
+
+            elif mode == "add_to_end":
+                for page in pdf_reader.pages:
+                    writer.add_page(page)
+                for jpg in jpg_files:
+                    writer.add_page(convert_jpg_to_pdf_page(jpg))
+
+            elif mode == "replace":
+                for i, page in enumerate(pdf_reader.pages):
+                    if i == replace_page and jpg_files:
+                        writer.add_page(convert_jpg_to_pdf_page(jpg_files[0]))
+                    else:
+                        writer.add_page(page)
+            else:
+                return "不正なモードが選択されました", 400
+
+            output = io.BytesIO()
+            writer.write(output)
+            output.seek(0)
+
+            return send_file(
+                output,
+                as_attachment=True,
+                download_name="merged_output.pdf",
+                mimetype='application/pdf'
+            )
+
+    except Exception as e:
+        app.logger.error(f"❌ mergeエラー: {e}")
+        return f"エラーが発生しました: {str(e)}", 500
+
+def launch_browser(port):
+    time.sleep(1.5)
+    webbrowser.open(f"http://127.0.0.1:{port}")
+
+def find_free_port(start=5050, end=5100):
+    import socket
+    for port in range(start, end):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError("空いているポートが見つかりません")
+
+if __name__ == '__main__':
+    port = find_free_port()
+    threading.Thread(target=launch_browser, args=(port,)).start()
+    app.logger.info(f"🧭 Flask 起動 on port {port}")
+    app.run(debug=False, port=port)
