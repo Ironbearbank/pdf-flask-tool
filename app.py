@@ -6,14 +6,6 @@ import os
 
 app = Flask(__name__, template_folder='templates')
 
-def find_free_port(start=5050, end=5100):
-    import socket
-    for port in range(start, end):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            if sock.connect_ex(('localhost', port)) != 0:
-                return port
-    raise OSError("No free ports available")
-
 def add_image_to_pdf(pdf_file, image_file, position):
     reader = PdfReader(pdf_file)
     writer = PdfWriter()
@@ -23,7 +15,7 @@ def add_image_to_pdf(pdf_file, image_file, position):
     page_width = float(reader.pages[0].mediabox.width)
     page_height = float(reader.pages[0].mediabox.height)
 
-    # リサイズ：横幅フィット・縦は自動で（アスペクト比保持）
+    # 横幅フィット（アスペクト比保持）
     aspect = image.height / image.width
     new_width = int(page_width)
     new_height = int(new_width * aspect)
@@ -68,9 +60,6 @@ def merge():
     merged_pdf = add_image_to_pdf(pdf_file, image_file, position)
     return send_file(merged_pdf, as_attachment=True, download_name='merged_output.pdf')
 
+# ✅ クラウド環境では自動ポート検出やブラウザ起動は不要
 if __name__ == '__main__':
-    port = find_free_port()
-    print(f"🚀 app.py started on http://localhost:{port}")
-    import webbrowser
-    webbrowser.open(f"http://localhost:{port}")
-    app.run(port=port)
+    app.run(host='0.0.0.0', port=10000)  # ローカル確認用（Renderでは無視されます）
