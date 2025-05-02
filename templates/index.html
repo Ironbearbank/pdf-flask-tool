@@ -53,18 +53,18 @@
   </style>
 </head>
 <body>
-<h1>JPG + PDF を結合する</h1>
+<h1>画像データとPDFを結合する</h1>
 <form id="mergeForm" enctype="multipart/form-data">
   <p>PDFファイルを選択またはドラッグ：<br>
     <input type="file" name="pdf" id="pdfInput" accept=".pdf" required>
   </p>
   <div class="drop-area" id="pdfDropArea">ここにPDFファイルをドロップ</div>
 
-  <p>JPGファイルを選択（複数選択可）またはドラッグ：<br>
-    <input type="file" name="jpgs" id="jpgInput" accept=".jpg,.jpeg" multiple required>
+  <p>画像ファイルを選択（複数選択可）またはドラッグ：<br>
+    <input type="file" name="jpgs" id="jpgInput" accept=".jpg,.jpeg,.png" multiple required>
     <button type="button" id="clearJpgs">選択をクリア</button>
   </p>
-  <div class="drop-area" id="jpgDropArea">ここにJPGファイルをドロップ</div>
+  <div class="drop-area" id="jpgDropArea">ここにJPG/PNGファイルをドロップ</div>
   <ul id="jpgList"></ul>
 
   <p>モード選択：<br>
@@ -106,12 +106,24 @@ const toggleBtn = document.getElementById('toggleModeBtn');
 const previewArea = document.getElementById('previewArea');
 const modeRadios = document.querySelectorAll('input[name="mode"]');
 
+function updateJpgInputFiles() {
+  const dt = new DataTransfer();
+  jpgFiles.forEach(f => dt.items.add(f));
+  jpgInput.files = dt.files;
+}
+
 jpgInput.addEventListener('change', e => {
-  jpgFiles.push(...e.target.files);
+  const newFiles = [...e.target.files].filter(newFile => {
+    return !jpgFiles.some(existing => existing.name === newFile.name);
+  });
+  jpgFiles.push(...newFiles);
+  updateJpgInputFiles();
   refreshUI();
 });
+
 clearBtn.addEventListener('click', () => {
   jpgFiles.length = 0;
+  updateJpgInputFiles();
   jpgInput.value = '';
   refreshUI();
 });
@@ -126,8 +138,10 @@ dropArea.addEventListener('dragleave', () => {
 dropArea.addEventListener('drop', e => {
   e.preventDefault();
   dropArea.style.background = '#fff';
-  const files = [...e.dataTransfer.files].filter(f => f.type.includes('image'));
-  jpgFiles.push(...files);
+  const incoming = [...e.dataTransfer.files].filter(f => f.type.includes('image'));
+  const filtered = incoming.filter(f => !jpgFiles.some(existing => existing.name === f.name));
+  jpgFiles.push(...filtered);
+  updateJpgInputFiles();
   refreshUI();
 });
 
@@ -199,11 +213,12 @@ function refreshUI() {
     filename.textContent = ` 📷 ${file.name}`;
 
     const deleteBtn = document.createElement('button');
-    deleteBtn.textContent = '🗑️';
+    deleteBtn.textContent = '🗑️ 削除';
     deleteBtn.style.marginLeft = '8px';
     deleteBtn.type = 'button';
     deleteBtn.onclick = () => {
       jpgFiles.splice(i, 1);
+      updateJpgInputFiles();
       refreshUI();
     };
 
@@ -253,6 +268,8 @@ form.addEventListener('submit', e => {
   e.preventDefault();
   const formData = new FormData(form);
   jpgFiles.forEach(f => formData.append("jpgs", f));
+  const jpgOrder = jpgFiles.map(f => f.name);
+  formData.append("jpg_order", JSON.stringify(jpgOrder));
 
   fetch('/merge', {
     method: 'POST',

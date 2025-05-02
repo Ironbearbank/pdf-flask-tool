@@ -6,7 +6,9 @@ import os
 import zipfile
 import tempfile
 import re
+import json
 from urllib.parse import quote
+from datetime import datetime
 
 app = Flask(__name__, template_folder='templates')
 
@@ -37,7 +39,7 @@ def convert_jpg_to_pdf_page(jpg_file, base_width=595, base_height=842):
     output_pdf = io.BytesIO()
     background.save(output_pdf, format="PDF")
     output_pdf.seek(0)
-    return PdfReader(output_pdf).pages[0]
+    return output_pdf
 
 @app.route('/')
 def index():
@@ -46,33 +48,41 @@ def index():
 @app.route('/merge', methods=['POST'])
 def merge():
     pdf_file = request.files.get('pdf')
-    all_jpg_files = request.files.getlist('jpgs')
+    jpg_files = request.files.getlist('jpgs')
+    jpg_order_json = request.form.get('jpg_order')
 
-    unique_jpg_files = {}
-    for f in all_jpg_files:
-        if f and f.filename.strip():
-            unique_jpg_files[f.filename] = f
-    jpg_files = list(unique_jpg_files.values())
-
-    if not pdf_file or not jpg_files:
+    if not pdf_file or not jpg_files or not jpg_order_json:
         return "PDFとJPGファイルを選択してください", 400
+
+    try:
+        ordered_filenames = json.loads(jpg_order_json)
+    except Exception:
+        return "JPGの順番情報が不正です", 400
+
+    jpg_file_map = {f.filename: f for f in jpg_files if f and f.filename.strip()}
+    jpg_files_ordered = [jpg_file_map.get(name) for name in ordered_filenames if name in jpg_file_map]
+
+    if len(jpg_files_ordered) == 0:
+        return "JPGファイルが見つかりません", 400
 
     with tempfile.TemporaryDirectory() as tmpdir:
         pdf_path = os.path.join(tmpdir, "input.pdf")
         pdf_file.save(pdf_path)
 
         pdf_base = os.path.splitext(sanitize(pdf_file.filename))[0]
-        output_paths = []
-
         reader = PdfReader(pdf_path)
         first_page = reader.pages[0]
         media_box = first_page.mediabox
         base_width = float(media_box.width)
         base_height = float(media_box.height)
 
-        for i, jpg in enumerate(jpg_files):
+        ordered_results = []
+
+        for i, jpg in enumerate(jpg_files_ordered):
             writer = PdfWriter()
-            jpg_page = convert_jpg_to_pdf_page(jpg, base_width, base_height)
+            jpg_pdf = convert_jpg_to_pdf_page(jpg, base_width, base_height)
+            jpg_pdf_reader = PdfReader(jpg_pdf)
+            jpg_page = jpg_pdf_reader.pages[0]
 
             mode = request.form.get('mode')
             if mode == 'add_to_start':
@@ -99,24 +109,24 @@ def merge():
 
             jpg_base = os.path.splitext(sanitize(jpg.filename))[0]
             output_filename = f"{jpg_base}_{pdf_base}.pdf"
-            output_path = os.path.join(tmpdir, output_filename)
+            blob = io.BytesIO()
+            writer.write(blob)
+            blob.seek(0)
+            ordered_results.append((output_filename, blob))
 
-            with open(output_path, 'wb') as f:
-                writer.write(f)
-
-            output_paths.append((output_path, output_filename))
-
-        if len(jpg_files) == 1 and len(output_paths) == 1:
-            path, filename = output_paths[0]
-            response = make_response(send_file(path, as_attachment=True))
+        if len(ordered_results) == 1:
+            filename, blob = ordered_results[0]
+            response = make_response(send_file(blob, as_attachment=True, download_name=filename))
             response.headers['Content-Disposition'] = f"attachment; filename*=UTF-8''{quote(filename)}"
             return response
 
         zip_filename = f"merged_{pdf_base}.zip"
         zip_path = os.path.join(tmpdir, zip_filename)
         with zipfile.ZipFile(zip_path, 'w') as zipf:
-            for path, name in output_paths:
-                zipf.write(path, arcname=name)
+            for filename, blob in ordered_results:
+                zipinfo = zipfile.ZipInfo(filename)
+                zipinfo.date_time = datetime.now().timetuple()[:6]
+                zipf.writestr(zipinfo, blob.read())
 
         response = make_response(send_file(zip_path, as_attachment=True))
         response.headers['Content-Disposition'] = f"attachment; filename*=UTF-8''{quote(zip_filename)}"
