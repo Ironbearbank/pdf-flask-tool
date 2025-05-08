@@ -22,26 +22,22 @@ def convert_image_to_pdf_page(image_file, base_width=595, base_height=842):
     page_aspect = base_width / base_height
 
     if img_aspect > page_aspect:
-        # 画像が横長 → 幅を基準にリサイズ
         new_width = base_width
         new_height = int(base_width / img_aspect)
     else:
-        # 画像が縦長 → 高さを基準にリサイズ
         new_height = base_height
         new_width = int(base_height * img_aspect)
     
-    # 画像をリサイズ
     img = img.resize((new_width, new_height), Image.LANCZOS)
-
-    # 背景（白）に画像を中央配置
     background = Image.new("RGB", (int(base_width), int(base_height)), (255, 255, 255))
     offset = ((base_width - new_width) // 2, (base_height - new_height) // 2)
     background.paste(img, offset)
     
-    output_pdf = io.BytesIO()
-    background.save(output_pdf, format="PDF")
-    output_pdf.seek(0)
-    return PdfReader(output_pdf).pages[0]
+    temp_pdf = io.BytesIO()
+    background.save(temp_pdf, format="PDF")
+    temp_pdf.seek(0)
+    
+    return PdfReader(temp_pdf).pages[0]
 
 @app.route('/')
 def index():
@@ -67,13 +63,13 @@ def merge():
         output_paths = []
 
         reader = PdfReader(pdf_path)
-        first_page = reader.pages[0]
-        base_width = int(first_page.mediabox.width)
-        base_height = int(first_page.mediabox.height)
+        base_width = int(reader.pages[0].mediabox.width)
+        base_height = int(reader.pages[0].mediabox.height)
 
         for i, image_file in enumerate(image_files):
             writer = PdfWriter()
             image_page = convert_image_to_pdf_page(image_file, base_width, base_height)
+            temp_pdf_path = os.path.join(tmpdir, f"{sanitize(image_file.filename)}_{pdf_base}.pdf")
 
             if mode == 'add_to_start':
                 writer.add_page(image_page)
@@ -92,37 +88,29 @@ def merge():
                         writer.add_page(image_page)
                     else:
                         writer.add_page(page)
-                
-                # 差し替えページが範囲外なら末尾に追加
+
                 if replace_index >= len(reader.pages):
                     writer.add_page(image_page)
             else:
                 return "無効なモードが選択されました", 400
 
-            image_base = os.path.splitext(sanitize(image_file.filename))[0]
-            output_filename = f"{image_base}_{pdf_base}.pdf"
-            output_path = os.path.join(tmpdir, output_filename)
-
-            with open(output_path, 'wb') as f:
+            # PDFを一時ファイルとして保存
+            with open(temp_pdf_path, 'wb') as f:
                 writer.write(f)
 
-            output_paths.append((output_path, output_filename))
+            output_paths.append(temp_pdf_path)
 
+        # 画像が1枚ならPDFを直接返す
         if len(output_paths) == 1:
-            path, filename = output_paths[0]
-            response = make_response(send_file(path, as_attachment=True))
-            response.headers['Content-Disposition'] = f"attachment; filename*=UTF-8''{quote(filename)}"
-            return response
+            return send_file(output_paths[0], as_attachment=True, download_name=os.path.basename(output_paths[0]))
 
-        zip_filename = f"merged_{pdf_base}.zip"
-        zip_path = os.path.join(tmpdir, zip_filename)
-        with zipfile.ZipFile(zip_path, 'w') as zipf:
-            for path, name in output_paths:
-                zipf.write(path, arcname=name)
+        # ZIPとして返す（逐次追加）
+        zip_filename = os.path.join(tmpdir, f"merged_{pdf_base}.zip")
+        with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for path in output_paths:
+                zipf.write(path, os.path.basename(path))
 
-        response = make_response(send_file(zip_path, as_attachment=True))
-        response.headers['Content-Disposition'] = f"attachment; filename*=UTF-8''{quote(zip_filename)}"
-        return response
+        return send_file(zip_filename, as_attachment=True, download_name=f"merged_{pdf_base}.zip")
 
 if __name__ == '__main__':
     app.run(debug=True, port=10000)
