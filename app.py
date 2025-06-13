@@ -1,43 +1,10 @@
-from flask import Flask, render_template, request, send_file, make_response
+from flask import Flask, render_template, request, send_file
 from PyPDF2 import PdfReader, PdfWriter
 from PIL import Image
-import io
-import os
-import zipfile
-import tempfile
-import re
-from urllib.parse import quote
+import fitz  # PyMuPDF
+import io, os, zipfile, tempfile
 
 app = Flask(__name__, template_folder='templates')
-
-def sanitize(filename: str) -> str:
-    filename = os.path.basename(filename)
-    return re.sub(r'[^\w.\-ぁ-んァ-ン一-龯]', '_', filename)
-
-def convert_image_to_pdf_page(image_file, base_width=595, base_height=842):
-    img = Image.open(image_file).convert("RGB")
-    
-    # 画像のリサイズ（アスペクト比維持）→ はみ出さないよう調整
-    img_aspect = img.width / img.height
-    page_aspect = base_width / base_height
-
-    if img_aspect > page_aspect:
-        new_width = base_width
-        new_height = int(base_width / img_aspect)
-    else:
-        new_height = base_height
-        new_width = int(base_height * img_aspect)
-    
-    img = img.resize((new_width, new_height), Image.LANCZOS)
-    background = Image.new("RGB", (int(base_width), int(base_height)), (255, 255, 255))
-    offset = ((base_width - new_width) // 2, (base_height - new_height) // 2)
-    background.paste(img, offset)
-    
-    temp_pdf = io.BytesIO()
-    background.save(temp_pdf, format="PDF")
-    temp_pdf.seek(0)
-    
-    return PdfReader(temp_pdf).pages[0]
 
 @app.route('/')
 def index():
@@ -45,72 +12,136 @@ def index():
 
 @app.route('/merge', methods=['POST'])
 def merge():
-    pdf_file = request.files.get('pdf')
-    image_files = request.files.getlist('jpgs')
-
-    if not pdf_file or not image_files:
-        return "PDFと画像ファイルを選択してください", 400
-
+    pdf_file = request.files.get('pdf_file')
+    images = request.files.getlist('images')
     mode = request.form.get('mode')
-    common_page = request.form.get('common_replace_page', type=int)
-    replace_pages = {f'replace_page_{i}': request.form.get(f'replace_page_{i}', type=int) for i in range(len(image_files))}
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        pdf_path = os.path.join(tmpdir, "input.pdf")
-        pdf_file.save(pdf_path)
+    print(f"受け取ったPDF: {pdf_file}")
+    print(f"受け取った画像: {images}")
+    print(f"受け取ったmode: {mode}")
+    if not pdf_file or not images:
+        return "PDFファイルまたは画像ファイルが指定されていません。", 400
 
-        pdf_base = os.path.splitext(sanitize(pdf_file.filename))[0]
-        output_paths = []
+    print(f"受け取った画像の数: {len(images)}")
 
-        reader = PdfReader(pdf_path)
-        base_width = int(reader.pages[0].mediabox.width)
-        base_height = int(reader.pages[0].mediabox.height)
+    temp_dir = tempfile.mkdtemp()
+    output_files = []
 
-        for i, image_file in enumerate(image_files):
-            writer = PdfWriter()
-            image_page = convert_image_to_pdf_page(image_file, base_width, base_height)
-            temp_pdf_path = os.path.join(tmpdir, f"{sanitize(image_file.filename)}_{pdf_base}.pdf")
+    pdf_bytes = pdf_file.read()
 
-            if mode == 'add_to_start':
-                writer.add_page(image_page)
-                for page in reader.pages:
+    for image in images:
+        pdf_reader = PdfReader(io.BytesIO(pdf_bytes))
+        img = Image.open(image).convert("RGB")
+
+        pdf_name = f"{os.path.splitext(image.filename)[0]}_{pdf_file.filename}"
+        output_path = os.path.join(temp_dir, pdf_name)
+
+        writer = PdfWriter()
+
+        if mode == 'replace':
+            replace_page = int(request.form.get('replace_page', 1)) - 1
+            new_pdf_path = create_image_pdf_fitz(img, pdf_reader.pages[replace_page])
+            new_page_reader = PdfReader(new_pdf_path)
+            for i, page in enumerate(pdf_reader.pages):
+                writer.add_page(new_page_reader.pages[0] if i == replace_page else page)
+
+        elif mode == 'add':
+            add_position = request.form.get('add_position')
+            custom_page_raw = request.form.get('custom_page', '').strip()
+            custom_page = int(custom_page_raw) - 1 if custom_page_raw.isdigit() else 0
+            new_pdf_path = create_image_pdf_fitz(img, pdf_reader.pages[0])
+            new_page_reader = PdfReader(new_pdf_path)
+            if add_position == 'start':
+                writer.add_page(new_page_reader.pages[0])
+                writer.add_pages(pdf_reader.pages)
+            elif add_position == 'end':
+                writer.add_pages(pdf_reader.pages)
+                writer.add_page(new_page_reader.pages[0])
+            elif add_position == 'custom':
+                for i, page in enumerate(pdf_reader.pages):
+                    if i == custom_page:
+                        writer.add_page(new_page_reader.pages[0])
                     writer.add_page(page)
-            elif mode == 'add_to_end':
-                for page in reader.pages:
-                    writer.add_page(page)
-                writer.add_page(image_page)
-            elif mode == 'replace':
-                replace_at = replace_pages.get(f'replace_page_{i}') or common_page
-                replace_index = (replace_at - 1) if replace_at else -1
-                
-                for j, page in enumerate(reader.pages):
-                    if j == replace_index:
-                        writer.add_page(image_page)
-                    else:
-                        writer.add_page(page)
+        else:
+            return "無効なモードです。", 400
 
-                if replace_index >= len(reader.pages):
-                    writer.add_page(image_page)
+        with open(output_path, 'wb') as f:
+            writer.write(f)
+
+        output_files.append(output_path)
+        print(f"追加されたPDFファイル: {output_path}")
+
+    print(f"生成されたPDFファイル数: {len(output_files)}")
+
+    if len(output_files) == 1:
+        return send_file(output_files[0], as_attachment=True)
+    else:
+        simple_pdf_name = os.path.splitext(pdf_file.filename)[0]
+        zip_path = os.path.join(temp_dir, f"merged_{simple_pdf_name}.zip")
+        with zipfile.ZipFile(zip_path, 'w') as zipf:
+            for file in output_files:
+                zipf.write(file, os.path.basename(file))
+                print(f"ZIPに追加: {file}")
+        return send_file(zip_path, as_attachment=True, download_name=f"merged_{simple_pdf_name}.zip")
+
+def create_image_pdf_fitz(img, reference_page):
+    page_width = float(reference_page.mediabox.width)
+    page_height = float(reference_page.mediabox.height)
+
+    img_byte = io.BytesIO()
+    img.save(img_byte, format='PNG')
+    img_byte.seek(0)
+
+    doc = fitz.open()
+    page = doc.new_page(width=page_width, height=page_height)
+    img_rect = fitz.Rect(0, 0, page_width, page_height)
+    img_stream = img_byte.read()
+    page.insert_image(img_rect, stream=img_stream, keep_proportion=True)
+
+    temp_pdf_path = os.path.join(tempfile.gettempdir(), f"fitz_page_{os.urandom(4).hex()}.pdf")
+    doc.save(temp_pdf_path)
+    doc.close()
+    return temp_pdf_path
+
+@app.route('/reverse', methods=['POST'])
+def reverse():
+    pdf_file = request.files.get('pdf_file')
+    reverse_start = int(request.form.get('reverse_start', 0))
+    reverse_end = int(request.form.get('reverse_end', 0))
+
+    if not pdf_file:
+        return "PDFファイルが選択されていません。", 400
+
+    temp_dir = tempfile.mkdtemp()
+    output_path = os.path.join(temp_dir, "reversed.pdf")
+
+    try:
+        reader = PdfReader(pdf_file)
+        total_pages = len(reader.pages)
+
+        if reverse_start + reverse_end >= total_pages:
+            return "中間ページが存在しません。", 400
+
+        writer = PdfWriter()
+        writer.add_pages(reader.pages[:reverse_start])
+
+        mid_pages = reader.pages[reverse_start:total_pages - reverse_end]
+        for i in range(0, len(mid_pages), 2):
+            if i + 1 < len(mid_pages):
+                writer.add_page(mid_pages[i + 1])
+                writer.add_page(mid_pages[i])
             else:
-                return "無効なモードが選択されました", 400
+                writer.add_page(mid_pages[i])
 
-            # PDFを一時ファイルとして保存
-            with open(temp_pdf_path, 'wb') as f:
-                writer.write(f)
+        writer.add_pages(reader.pages[total_pages - reverse_end:])
 
-            output_paths.append(temp_pdf_path)
+        with open(output_path, 'wb') as f:
+            writer.write(f)
 
-        # 画像が1枚ならPDFを直接返す
-        if len(output_paths) == 1:
-            return send_file(output_paths[0], as_attachment=True, download_name=os.path.basename(output_paths[0]))
+        return send_file(output_path, as_attachment=True, download_name="reversed.pdf")
 
-        # ZIPとして返す（逐次追加）
-        zip_filename = os.path.join(tmpdir, f"merged_{pdf_base}.zip")
-        with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for path in output_paths:
-                zipf.write(path, os.path.basename(path))
-
-        return send_file(zip_filename, as_attachment=True, download_name=f"merged_{pdf_base}.zip")
+    except Exception as e:
+        return f"エラーが発生しました: {str(e)}", 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=10000)
+    app.run(debug=True)

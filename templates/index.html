@@ -1,306 +1,135 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <title>JPG + PDF 結合ツール</title>
-  <style>
-    body {
-      font-family: sans-serif;
-      margin: 40px;
-    }
-    h1 {
-      color: #333;
-    }
-    form {
-      background: #f9f9f9;
-      padding: 20px;
-      border-radius: 10px;
-      box-shadow: 0 0 8px rgba(0,0,0,0.1);
-      max-width: 700px;
-    }
-    .drop-area {
-      border: 2px dashed #ccc;
-      padding: 20px;
-      text-align: center;
-      margin-bottom: 10px;
-      background: #fff;
-    }
-    .preview-item {
-      margin: 10px 0;
-      display: flex;
-      align-items: center;
-    }
-    .preview-item img {
-      height: 80px;
-      margin-right: 10px;
-      border: 1px solid #ccc;
-    }
-    .preview-label {
-      margin-right: 10px;
-      white-space: nowrap;
-    }
-    button {
-      padding: 10px 20px;
-      background-color: #4285f4;
-      color: white;
-      border: none;
-      border-radius: 5px;
-      cursor: pointer;
-    }
-    button:hover {
-      background-color: #3367d6;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <title>PDF結合ツール</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; text-align: center; }
+        .main-menu { margin: 40px 0; }
+        .main-menu button { padding: 15px 30px; font-size: 18px; margin: 10px; cursor: pointer; }
+        .section { display: none; margin-top: 20px; }
+        .drop-area { border: 2px dashed #ccc; padding: 20px; margin: 10px 0; }
+    </style>
 </head>
 <body>
-<h1>画像データとPDFを結合する</h1>
-<form id="mergeForm" enctype="multipart/form-data">
-  <p>PDFファイルを選択またはドラッグ：<br>
-    <input type="file" name="pdf" id="pdfInput" accept=".pdf" required>
-  </p>
-  <div class="drop-area" id="pdfDropArea">ここにPDFファイルをドロップ</div>
+    <h2>PDF結合ツール</h2>
 
-  <p>画像ファイルを選択（複数選択可）またはドラッグ：<br>
-    <input type="file" name="jpgs" id="jpgInput" accept=".jpg,.jpeg,.png" multiple required>
-    <button type="button" id="clearJpgs">選択をクリア</button>
-  </p>
-  <div class="drop-area" id="jpgDropArea">ここにJPG/PNGファイルをドロップ</div>
-  <ul id="jpgList"></ul>
-
-  <p>モード選択：<br>
-    <label><input type="radio" name="mode" value="add_to_start" checked> 最初に追加</label>
-    <label><input type="radio" name="mode" value="add_to_end"> 最後に追加</label>
-    <label><input type="radio" name="mode" value="replace"> 指定ページに差し替え</label>
-  </p>
-
-  <div id="pageInputContainer" style="display: none;">
-    <button type="button" id="toggleModeBtn">📄 個別に差し替えページを選ぶ</button>
-    <div id="commonInput">
-      <input type="number" name="common_replace_page" id="commonPageInput" min="1"
-             placeholder="すべてのJPGを差し替えるページ番号（1ページ目 = 1）">
+    <div class="main-menu">
+        <button onclick="showSection('merge')">画像データをPDFに結合</button>
+        <button onclick="showSection('edit')">PDFデータの順番を編集</button>
     </div>
-    <div id="individualInputs" style="display: none;"></div>
-  </div>
 
-  <div id="previewArea"></div>
+    <div id="merge-section" class="section">
+        <h3>画像データをPDFに結合</h3>
+        <div class="drop-area">ここにPDFをドロップ</div>
+        <input type="file" id="pdf-input" accept="application/pdf"><br>
 
-  <button type="submit">結合してダウンロード</button>
-</form>
+        <div class="drop-area">ここにJPG/PNGをドロップ</div>
+        <input type="file" id="image-input" accept="image/jpeg, image/png" multiple><br>
 
-<script>
-const jpgFiles = [];
-let useIndividualMode = false;
+        <label><input type="radio" name="mode" value="add" onchange="toggleOptions()" checked> 追加</label>
+        <label><input type="radio" name="mode" value="replace" onchange="toggleOptions()"> 差し替え</label><br>
 
-const form = document.getElementById('mergeForm');
-const pdfInput = document.getElementById('pdfInput');
-const jpgInput = document.getElementById('jpgInput');
-const clearBtn = document.getElementById('clearJpgs');
-const jpgList = document.getElementById('jpgList');
-const dropArea = document.getElementById('jpgDropArea');
-const pdfDrop = document.getElementById('pdfDropArea');
-const pageInputContainer = document.getElementById('pageInputContainer');
-const commonInput = document.getElementById('commonInput');
-const individualInputs = document.getElementById('individualInputs');
-const commonPageInput = document.getElementById('commonPageInput');
-const toggleBtn = document.getElementById('toggleModeBtn');
-const previewArea = document.getElementById('previewArea');
-const modeRadios = document.querySelectorAll('input[name="mode"]');
+        <div id="add-options" style="display: block;">
+            <label><input type="radio" name="add_position" value="start" checked> 最初に追加</label>
+            <label><input type="radio" name="add_position" value="end"> 最後に追加</label>
+            <label><input type="radio" name="add_position" value="custom" onchange="toggleCustomPage()"> 指定ページに追加</label>
+            <input type="number" id="custom-page" placeholder="ページ番号" min="1" style="display:none;"><br>
+        </div>
 
-function updateJpgInputFiles() {
-  const dt = new DataTransfer();
-  jpgFiles.forEach(f => dt.items.add(f));
-  jpgInput.files = dt.files;
-}
+        <div id="replace-options" style="display: none;">
+            <label>差し替えページ番号：</label>
+            <input type="number" id="replace-page" placeholder="ページ番号" min="1"><br>
+        </div>
 
-jpgInput.addEventListener('change', e => {
-  const newFiles = [...e.target.files].filter(newFile => {
-    return !jpgFiles.some(existing => existing.name === newFile.name);
-  });
-  jpgFiles.push(...newFiles);
-  updateJpgInputFiles();
-  refreshUI();
-});
+        <button onclick="mergeFiles()">結合してダウンロード</button>
+    </div>
 
-clearBtn.addEventListener('click', () => {
-  jpgFiles.length = 0;
-  updateJpgInputFiles();
-  jpgInput.value = '';
-  refreshUI();
-});
+    <div id="edit-section" class="section">
+        <h3>PDFデータの順番を編集</h3>
+        <div class="drop-area">ここにPDFをドロップ</div>
+        <input type="file" id="edit-pdf-input" accept="application/pdf"><br><br>
 
-dropArea.addEventListener('dragover', e => {
-  e.preventDefault();
-  dropArea.style.background = '#eee';
-});
-dropArea.addEventListener('dragleave', () => {
-  dropArea.style.background = '#fff';
-});
-dropArea.addEventListener('drop', e => {
-  e.preventDefault();
-  dropArea.style.background = '#fff';
-  const incoming = [...e.dataTransfer.files].filter(f => f.type.includes('image'));
-  const filtered = incoming.filter(f => !jpgFiles.some(existing => existing.name === f.name));
-  jpgFiles.push(...filtered);
-  updateJpgInputFiles();
-  refreshUI();
-});
+        <label>先頭保持ページ数：</label>
+        <input type="number" id="reverse-start" value="1" min="0"><br>
+        <label>末尾保持ページ数：</label>
+        <input type="number" id="reverse-end" value="1" min="0"><br>
 
-pdfDrop.addEventListener('dragover', e => {
-  e.preventDefault();
-  pdfDrop.style.background = '#eee';
-});
-pdfDrop.addEventListener('dragleave', () => {
-  pdfDrop.style.background = '#fff';
-});
-pdfDrop.addEventListener('drop', e => {
-  e.preventDefault();
-  pdfDrop.style.background = '#fff';
-  const files = [...e.dataTransfer.files].filter(f => f.name.endsWith('.pdf'));
-  if (files.length > 0) {
-    const dt = new DataTransfer();
-    files.forEach(file => dt.items.add(file));
-    pdfInput.files = dt.files;
-  }
-});
+        <button onclick="reversePages()">中間ページをペアで入れ替え</button>
+    </div>
 
-modeRadios.forEach(r => r.addEventListener('change', () => {
-  useIndividualMode = false;
-  toggleBtn.textContent = '📄 個別に差し替えページを選ぶ';
-  pageInputContainer.style.display = (document.querySelector('input[name="mode"]:checked').value === 'replace') ? 'block' : 'none';
-  refreshUI();
-}));
+    <script>
+        function showSection(section) {
+            document.querySelectorAll('.section').forEach(el => el.style.display = 'none');
+            document.getElementById(section + '-section').style.display = 'block';
+        }
 
-toggleBtn.addEventListener('click', () => {
-  useIndividualMode = !useIndividualMode;
-  toggleBtn.textContent = useIndividualMode ? '↩ 共通のページ番号に戻す' : '📄 個別に差し替えページを選ぶ';
-  refreshUI();
-});
+        function toggleOptions() {
+            const mode = document.querySelector('input[name="mode"]:checked').value;
+            document.getElementById('add-options').style.display = (mode === 'add') ? 'block' : 'none';
+            document.getElementById('replace-options').style.display = (mode === 'replace') ? 'block' : 'none';
 
-commonPageInput.addEventListener('input', updatePreviewFromInputs);
+            toggleCustomPage();
+        }
 
-function refreshUI() {
-  jpgList.innerHTML = '';
-  individualInputs.innerHTML = '';
-  previewArea.innerHTML = '';
+        function toggleCustomPage() {
+            const customPage = document.getElementById('custom-page');
+            const addPosition = document.querySelector('input[name="add_position"]:checked')?.value;
+            customPage.style.display = addPosition === 'custom' ? 'inline-block' : 'none';
+        }
 
-  jpgFiles.forEach((file, i) => {
-    const li = document.createElement('li');
-    li.textContent = file.name;
-    jpgList.appendChild(li);
+        function mergeFiles() {
+            const pdfFile = document.getElementById('pdf-input').files[0];
+            const images = document.getElementById('image-input').files;
+            const formData = new FormData();
+            formData.append('pdf_file', pdfFile);
+            for (const image of images) {
+                formData.append('images', image);
+            }
+            formData.append('mode', document.querySelector('input[name="mode"]:checked').value);
+            formData.append('replace_page', document.getElementById('replace-page').value);
+            const pos = document.querySelector('input[name="add_position"]:checked')?.value;
+            formData.append('add_position', pos);
+            formData.append('custom_page', document.getElementById('custom-page').value);
 
-    if (useIndividualMode) {
-      const input = document.createElement('input');
-      input.type = 'number';
-      input.name = `replace_page_${i}`;
-      input.min = 1;
-      input.placeholder = `${file.name} の差し替えページ`;
-      input.dataset.index = i;
-      input.addEventListener('input', updatePreviewFromInputs);
-      individualInputs.appendChild(input);
-    }
+            fetch('/merge', { method: 'POST', body: formData })
+                .then(res => {
+                    const contentType = res.headers.get('Content-Type') || '';
+                    const isZip = contentType.includes('zip');
+                    const filenameHeader = res.headers.get('Content-Disposition');
+                    const filename = filenameHeader?.split('filename=')[1]?.replace(/[";]/g, '') || (isZip ? 'output.zip' : 'merged_output.pdf');
+                    return res.blob().then(blob => ({ blob, filename }));
+                })
+                .then(({ blob, filename }) => {
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(blob);
+                    link.download = filename;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                });
+        }
 
-    const div = document.createElement('div');
-    div.className = 'preview-item';
+        function reversePages() {
+            const pdfFile = document.getElementById('edit-pdf-input').files[0];
+            const formData = new FormData();
+            formData.append('pdf_file', pdfFile);
+            formData.append('reverse_start', document.getElementById('reverse-start').value);
+            formData.append('reverse_end', document.getElementById('reverse-end').value);
 
-    const img = document.createElement('img');
-    img.alt = file.name;
+            fetch('/reverse', { method: 'POST', body: formData })
+                .then(res => res.blob())
+                .then(blob => {
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(blob);
+                    link.download = 'reversed.pdf';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                });
+        }
 
-    const label = document.createElement('span');
-    label.className = 'preview-label';
-    label.dataset.index = i;
-
-    const filename = document.createElement('span');
-    filename.textContent = ` 📷 ${file.name}`;
-
-    const deleteBtn = document.createElement('button');
-    deleteBtn.textContent = '🗑️ 削除';
-    deleteBtn.style.marginLeft = '8px';
-    deleteBtn.type = 'button';
-    deleteBtn.onclick = () => {
-      jpgFiles.splice(i, 1);
-      updateJpgInputFiles();
-      refreshUI();
-    };
-
-    div.appendChild(img);
-    div.appendChild(label);
-    div.appendChild(filename);
-    div.appendChild(deleteBtn);
-
-    previewArea.appendChild(div);
-
-    const reader = new FileReader();
-    reader.onload = e => {
-      img.src = e.target.result;
-      updatePreviewFromInputs();
-    };
-    reader.readAsDataURL(file);
-  });
-
-  commonInput.style.display = useIndividualMode ? 'none' : 'block';
-  individualInputs.style.display = useIndividualMode ? 'block' : 'none';
-
-  const isReplace = document.querySelector('input[name="mode"]:checked').value === 'replace';
-  commonPageInput.required = isReplace && !useIndividualMode;
-}
-
-function updatePreviewFromInputs() {
-  const mode = document.querySelector('input[name="mode"]:checked').value;
-  const labels = document.querySelectorAll('.preview-label');
-
-  labels.forEach(label => {
-    const idx = label.dataset.index;
-    if (mode === 'replace') {
-      if (useIndividualMode) {
-        const input = document.querySelector(`input[name="replace_page_${idx}"]`);
-        label.textContent = `個別指定ページ：${input?.value || '未指定'}`;
-      } else {
-        const value = commonPageInput.value || '未指定';
-        label.textContent = `共通：${value}`;
-      }
-    } else {
-      label.textContent = mode === 'add_to_start' ? '📌 最初に追加' : '📎 最後に追加';
-    }
-  });
-}
-
-form.addEventListener('submit', e => {
-  e.preventDefault();
-  const formData = new FormData(form);
-  jpgFiles.forEach(f => formData.append("jpgs", f));
-  const jpgOrder = jpgFiles.map(f => f.name);
-  formData.append("jpg_order", JSON.stringify(jpgOrder));
-
-  fetch('/merge', {
-    method: 'POST',
-    body: formData
-  })
-    .then(res => {
-      if (!res.ok) throw new Error("HTTPエラー: " + res.status);
-      const disposition = res.headers.get('Content-Disposition');
-      const filename = (() => {
-        const utf8Match = disposition?.match(/filename\*=UTF-8''([^;\n]+)/);
-        if (utf8Match) return decodeURIComponent(utf8Match[1]);
-        const fallback = disposition?.match(/filename="?([^";]+)"?/);
-        if (fallback) return fallback[1];
-        return 'download.pdf';
-      })();
-      return res.blob().then(blob => ({ blob, filename }));
-    })
-    .then(({ blob, filename }) => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      requestAnimationFrame(() => {
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-      });
-    })
-    .catch(err => alert("ダウンロードに失敗しました: " + err));
-});
-</script>
+        window.onload = () => showSection('merge');
+    </script>
 </body>
 </html>
