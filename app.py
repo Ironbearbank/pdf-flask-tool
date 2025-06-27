@@ -16,23 +16,16 @@ def merge():
     images = request.files.getlist('images')
     mode = request.form.get('mode')
 
-    print(f"受け取ったPDF: {pdf_file}")
-    print(f"受け取った画像: {images}")
-    print(f"受け取ったmode: {mode}")
     if not pdf_file or not images:
         return "PDFファイルまたは画像ファイルが指定されていません。", 400
 
-    print(f"受け取った画像の数: {len(images)}")
-
     temp_dir = tempfile.mkdtemp()
     output_files = []
-
     pdf_bytes = pdf_file.read()
 
     for image in images:
         pdf_reader = PdfReader(io.BytesIO(pdf_bytes))
         img = Image.open(image).convert("RGB")
-
         pdf_name = f"{os.path.splitext(image.filename)[0]}_{pdf_file.filename}"
         output_path = os.path.join(temp_dir, pdf_name)
 
@@ -51,11 +44,14 @@ def merge():
             custom_page = int(custom_page_raw) - 1 if custom_page_raw.isdigit() else 0
             new_pdf_path = create_image_pdf_fitz(img, pdf_reader.pages[0])
             new_page_reader = PdfReader(new_pdf_path)
+
             if add_position == 'start':
                 writer.add_page(new_page_reader.pages[0])
-                writer.add_pages(pdf_reader.pages)
+                for page in pdf_reader.pages:
+                    writer.add_page(page)
             elif add_position == 'end':
-                writer.add_pages(pdf_reader.pages)
+                for page in pdf_reader.pages:
+                    writer.add_page(page)
                 writer.add_page(new_page_reader.pages[0])
             elif add_position == 'custom':
                 for i, page in enumerate(pdf_reader.pages):
@@ -69,24 +65,33 @@ def merge():
             writer.write(f)
 
         output_files.append(output_path)
-        print(f"追加されたPDFファイル: {output_path}")
-
-    print(f"生成されたPDFファイル数: {len(output_files)}")
 
     if len(output_files) == 1:
         return send_file(output_files[0], as_attachment=True)
     else:
-        simple_pdf_name = os.path.splitext(pdf_file.filename)[0]
-        zip_path = os.path.join(temp_dir, f"merged_{simple_pdf_name}.zip")
+        zip_path = os.path.join(temp_dir, f"merged_{pdf_file.filename}.zip")
         with zipfile.ZipFile(zip_path, 'w') as zipf:
             for file in output_files:
                 zipf.write(file, os.path.basename(file))
-                print(f"ZIPに追加: {file}")
-        return send_file(zip_path, as_attachment=True, download_name=f"merged_{simple_pdf_name}.zip")
+        return send_file(zip_path, as_attachment=True, download_name=f"merged_{pdf_file.filename}.zip")
 
 def create_image_pdf_fitz(img, reference_page):
     page_width = float(reference_page.mediabox.width)
     page_height = float(reference_page.mediabox.height)
+
+    img_width, img_height = img.size
+    img_aspect = img_height / img_width
+    page_aspect = page_height / page_width
+
+    if img_aspect > page_aspect:
+        target_height = page_height
+        target_width = page_height / img_aspect
+    else:
+        target_width = page_width
+        target_height = page_width * img_aspect
+
+    x_offset = (page_width - target_width) / 2
+    y_offset = (page_height - target_height) / 2
 
     img_byte = io.BytesIO()
     img.save(img_byte, format='PNG')
@@ -94,13 +99,13 @@ def create_image_pdf_fitz(img, reference_page):
 
     doc = fitz.open()
     page = doc.new_page(width=page_width, height=page_height)
-    img_rect = fitz.Rect(0, 0, page_width, page_height)
-    img_stream = img_byte.read()
-    page.insert_image(img_rect, stream=img_stream, keep_proportion=True)
+    img_rect = fitz.Rect(x_offset, y_offset, x_offset + target_width, y_offset + target_height)
+    page.insert_image(img_rect, stream=img_byte.read(), keep_proportion=True)
 
     temp_pdf_path = os.path.join(tempfile.gettempdir(), f"fitz_page_{os.urandom(4).hex()}.pdf")
     doc.save(temp_pdf_path)
     doc.close()
+
     return temp_pdf_path
 
 @app.route('/reverse', methods=['POST'])
@@ -123,17 +128,24 @@ def reverse():
             return "中間ページが存在しません。", 400
 
         writer = PdfWriter()
-        writer.add_pages(reader.pages[:reverse_start])
+
+        for i in range(reverse_start):
+            writer.add_page(reader.pages[i])
 
         mid_pages = reader.pages[reverse_start:total_pages - reverse_end]
-        for i in range(0, len(mid_pages), 2):
+
+        i = 0
+        while i < len(mid_pages):
             if i + 1 < len(mid_pages):
                 writer.add_page(mid_pages[i + 1])
                 writer.add_page(mid_pages[i])
+                i += 2
             else:
                 writer.add_page(mid_pages[i])
+                i += 1
 
-        writer.add_pages(reader.pages[total_pages - reverse_end:])
+        for i in range(total_pages - reverse_end, total_pages):
+            writer.add_page(reader.pages[i])
 
         with open(output_path, 'wb') as f:
             writer.write(f)
