@@ -33,8 +33,8 @@ def merge():
 
         if mode == 'replace':
             replace_page = int(request.form.get('replace_page', 1)) - 1
-            new_pdf_path = create_image_pdf_fitz(img, pdf_reader.pages[replace_page])
-            new_page_reader = PdfReader(new_pdf_path)
+            new_pdf_bytes = create_image_pdf_fitz(img, pdf_reader.pages[replace_page])
+            new_page_reader = PdfReader(io.BytesIO(new_pdf_bytes))
             for i, page in enumerate(pdf_reader.pages):
                 writer.add_page(new_page_reader.pages[0] if i == replace_page else page)
 
@@ -42,8 +42,8 @@ def merge():
             add_position = request.form.get('add_position')
             custom_page_raw = request.form.get('custom_page', '').strip()
             custom_page = int(custom_page_raw) - 1 if custom_page_raw.isdigit() else 0
-            new_pdf_path = create_image_pdf_fitz(img, pdf_reader.pages[0])
-            new_page_reader = PdfReader(new_pdf_path)
+            new_pdf_bytes = create_image_pdf_fitz(img, pdf_reader.pages[0])
+            new_page_reader = PdfReader(io.BytesIO(new_pdf_bytes))
 
             if add_position == 'start':
                 writer.add_page(new_page_reader.pages[0])
@@ -94,6 +94,7 @@ def create_image_pdf_fitz(img, reference_page):
     y_offset = (page_height - target_height) / 2
 
     img_byte = io.BytesIO()
+    img = img.copy()
     img.save(img_byte, format='PNG')
     img_byte.seek(0)
 
@@ -102,11 +103,12 @@ def create_image_pdf_fitz(img, reference_page):
     img_rect = fitz.Rect(x_offset, y_offset, x_offset + target_width, y_offset + target_height)
     page.insert_image(img_rect, stream=img_byte.read(), keep_proportion=True)
 
-    temp_pdf_path = os.path.join(tempfile.gettempdir(), f"fitz_page_{os.urandom(4).hex()}.pdf")
-    doc.save(temp_pdf_path)
+    output_bytes = io.BytesIO()
+    doc.save(output_bytes)
     doc.close()
+    output_bytes.seek(0)
 
-    return temp_pdf_path
+    return output_bytes.read()
 
 @app.route('/reverse', methods=['POST'])
 def reverse():
